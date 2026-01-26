@@ -16,6 +16,11 @@ var upgrader = websocket.Upgrader{
 func main() {
 	manager := NewRoomManager()
 
+	http.HandleFunc("/health_ping",func(w http.ResponseWriter,r *http.Request){
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Server is alive"))
+	})
+
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
