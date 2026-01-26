@@ -19,6 +19,7 @@ func main() {
 	http.HandleFunc("/health_ping",func(w http.ResponseWriter,r *http.Request){
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Server is alive"))
+		log.Println("cron ping received")
 	})
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
