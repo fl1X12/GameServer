@@ -236,7 +236,7 @@ func (rm *RoomManager) HandleForfeit(conn *websocket.Conn){
 			c.Conn.WriteJSON(dcMsg)
 		}
 		room.Mutex.Unlock()
-		go. rm.DeleteRoom(client.RoomId)
+		go rm.DeleteRoom(client.RoomId)
 	}
 
 
