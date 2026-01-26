@@ -60,6 +60,9 @@ func main() {
 
 			case "make_move":
 				manager.HandleMove(conn, msg)
+			
+			case "forfeit":
+				manager.HandleForfeit(conn)
 
 			default:
 				log.Println("Unknown message type:", msg.Type)

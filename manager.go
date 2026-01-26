@@ -203,6 +203,45 @@ func (rm *RoomManager) HandleDisconnect(conn *websocket.Conn) {
 	rm.ClientMapLock.Unlock()
 }
 
+func (rm *RoomManager) HandleForfeit(conn *websocket.Conn){
+	rm.ClientMapLock.RLock()
+	client,ok := rm.ClientMap[conn]
+	rm.ClientMapLock.RUnlock()
+
+	if !ok{
+		return
+	}
+
+	rm.roomsLock.RLock()
+	room,exists :=rm.rooms[client.RoomId]
+	rm.roomsLock.RUnlock()
+
+	var overPayload GameOverPayload
+	if exists{
+		room.Mutex.Lock()
+		for _,c := range room.Clients{
+			if c.Conn !=conn{
+				overPayload = GameOverPayload{Winner: c.PlayerIndex}
+				break
+			}
+		}
+
+		jsonBytes,_ :=json.Marshal(overPayload)
+		dcMsg:=Message{
+			Type: "GAME_OVER",
+			Payload: string(jsonBytes),
+		}
+
+		for _,c := range room.Clients{
+			c.Conn.WriteJSON(dcMsg)
+		}
+		room.Mutex.Unlock()
+		go. rm.DeleteRoom(client.RoomId)
+	}
+
+
+}
+
 func checkWin(board [9]int) int {
 	wins := [][]int{
 		{0, 1, 2}, {3, 4, 5}, {6, 7, 8},
