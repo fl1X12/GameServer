@@ -22,7 +22,7 @@ func main() {
 		log.Println("cron ping received")
 	})
 
-	http.HandleFunc("/state check", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/state_check", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Server is alive"))
 		manager.Server_state_logger()
