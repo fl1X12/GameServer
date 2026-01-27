@@ -16,10 +16,16 @@ var upgrader = websocket.Upgrader{
 func main() {
 	manager := NewRoomManager()
 
-	http.HandleFunc("/health_ping",func(w http.ResponseWriter,r *http.Request){
+	http.HandleFunc("/health_ping", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Server is alive"))
 		log.Println("cron ping received")
+	})
+
+	http.HandleFunc("/state check", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Server is alive"))
+		manager.Server_state_logger()
 	})
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +36,7 @@ func main() {
 		}
 
 		defer func() {
-			manager.HandleDisconnect(conn) // ✅ Full cleanup
+			manager.HandleDisconnect(conn)
 			conn.Close()
 		}()
 
@@ -60,7 +66,7 @@ func main() {
 
 			case "make_move":
 				manager.HandleMove(conn, msg)
-			
+
 			case "forfeit":
 				manager.HandleForfeit(conn)
 

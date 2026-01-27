@@ -203,42 +203,41 @@ func (rm *RoomManager) HandleDisconnect(conn *websocket.Conn) {
 	rm.ClientMapLock.Unlock()
 }
 
-func (rm *RoomManager) HandleForfeit(conn *websocket.Conn){
+func (rm *RoomManager) HandleForfeit(conn *websocket.Conn) {
 	rm.ClientMapLock.RLock()
-	client,ok := rm.ClientMap[conn]
+	client, ok := rm.ClientMap[conn]
 	rm.ClientMapLock.RUnlock()
 
-	if !ok{
+	if !ok {
 		return
 	}
 
 	rm.roomsLock.RLock()
-	room,exists :=rm.rooms[client.RoomId]
+	room, exists := rm.rooms[client.RoomId]
 	rm.roomsLock.RUnlock()
 
 	var overPayload GameOverPayload
-	if exists{
+	if exists {
 		room.Mutex.Lock()
-		for _,c := range room.Clients{
-			if c.Conn !=conn{
+		for _, c := range room.Clients {
+			if c.Conn != conn {
 				overPayload = GameOverPayload{Winner: c.PlayerIndex}
 				break
 			}
 		}
 
-		jsonBytes,_ :=json.Marshal(overPayload)
-		dcMsg:=Message{
-			Type: "GAME_OVER",
+		jsonBytes, _ := json.Marshal(overPayload)
+		dcMsg := Message{
+			Type:    "GAME_OVER",
 			Payload: string(jsonBytes),
 		}
 
-		for _,c := range room.Clients{
+		for _, c := range room.Clients {
 			c.Conn.WriteJSON(dcMsg)
 		}
 		room.Mutex.Unlock()
 		go rm.DeleteRoom(client.RoomId)
 	}
-
 
 }
 
@@ -296,15 +295,15 @@ func (rm *RoomManager) DeleteRoom(roomId string) {
 	}
 	room.Mutex.Unlock()
 
-	// Only remove from ClientMap - DON'T close connections!
-	// Players stay connected and can immediately find another match
+	//Only removing from ClientMap
+	//Players stay connected and can immediately find another match
 	rm.ClientMapLock.Lock()
 	for _, conn := range connections {
 		delete(rm.ClientMap, conn)
 	}
 	rm.ClientMapLock.Unlock()
 
-	fmt.Printf("Room %s deleted. Active games: %d (connections kept alive)\n", roomId, len(rm.rooms))
+	fmt.Printf("Room %s deleted. Active games: %d \n", roomId, len(rm.rooms))
 }
 
 func broadcastGameStart(room *Room) {
@@ -324,4 +323,18 @@ func broadcastGameStart(room *Room) {
 
 		c.Conn.WriteJSON(msg)
 	}
+}
+
+func (rm *RoomManager) Server_state_logger() {
+	rm.roomsLock.Lock()
+	rm.ClientMapLock.Lock()
+	defer func() {
+		rm.roomsLock.Unlock()
+		rm.ClientMapLock.Unlock()
+	}()
+
+	for key, _ := range rm.rooms {
+		fmt.Printf("%s \n", key)
+	}
+
 }
