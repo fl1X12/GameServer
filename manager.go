@@ -397,9 +397,6 @@ func (rm *RoomManager) Server_state_logger() {
 // RegisterClient registers a new client connection with a unique ID
 func (rm *RoomManager) RegisterClient(conn *websocket.Conn, clientID string) {
 	rm.ConnToClientIDLock.Lock()
-	rm.ConnToClientIDLock.Unlock()
-
-	rm.ConnToClientIDLock.Lock()
 	rm.ConnToClientID[conn] = clientID
 	rm.ConnToClientIDLock.Unlock()
 
