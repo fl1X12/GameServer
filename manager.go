@@ -146,24 +146,27 @@ func (rm *RoomManager) HandleFindMatch(conn *websocket.Conn, clientID string) {
 		return
 	}
 
+	// Pull the potential opponent
 	oppClientID := rm.matchmakingQueue[0]
 	rm.matchmakingQueue = rm.matchmakingQueue[1:]
 	rm.queueLock.Unlock()
 
-	// Get opponent's client info
+	// Check if the opponent is actually still valid
 	rm.ClientMapLock.RLock()
 	oppClient, oppExists := rm.ClientMap[oppClientID]
 	rm.ClientMapLock.RUnlock()
 
 	if !oppExists {
-		// Opponent no longer exists, try to match current player again
+		fmt.Println("Opponent disconnected, re-queuing current player...")
+		// Recursively call or manually re-add.
+		// Best to just re-add and return.
 		rm.queueLock.Lock()
 		rm.matchmakingQueue = append(rm.matchmakingQueue, clientID)
 		rm.queueLock.Unlock()
-		fmt.Println("Opponent disconnected, re-queuing player...")
 		return
 	}
 
+	// --- MATCH START LOGIC ---
 	rm.roomsLock.Lock()
 	rm.totalMatches++
 	roomId := fmt.Sprintf("room_%d", rm.totalMatches)
@@ -177,19 +180,23 @@ func (rm *RoomManager) HandleFindMatch(conn *websocket.Conn, clientID string) {
 	rm.rooms[roomId] = newRoom
 	rm.roomsLock.Unlock()
 
+	// Create client objects
 	ClientO := &Client{ID: clientID, Conn: conn, PlayerIndex: 0, RoomId: roomId}
 	ClientX := &Client{ID: oppClientID, Conn: oppClient.Conn, PlayerIndex: 1, RoomId: roomId}
 
+	// Update Room
+	newRoom.Mutex.Lock()
 	newRoom.Clients[clientID] = ClientO
 	newRoom.Clients[oppClientID] = ClientX
+	newRoom.Mutex.Unlock()
 
+	// Update Global Client Map
 	rm.ClientMapLock.Lock()
 	rm.ClientMap[clientID] = ClientO
 	rm.ClientMap[oppClientID] = ClientX
 	rm.ClientMapLock.Unlock()
 
 	fmt.Printf("Match Started! Room: %s\n", roomId)
-
 	broadcastGameStart(newRoom)
 }
 
