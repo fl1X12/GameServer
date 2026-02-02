@@ -18,8 +18,8 @@ type BroadcastMovePayload struct {
 
 // Initial Game payload to tell Unity the starting state of the game
 type GameStartPayload struct {
-	PlayerIndex int  `json:"playerIndex"` // 0 - O and 1 - X
-	Turn        bool `json:"turn"`
+	PlayerIndex int `json:"playerIndex"` // 0 - O and 1 - X
+	Turn        int `json:"turn"`
 }
 
 type GameOverPayload struct {

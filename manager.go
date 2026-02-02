@@ -378,11 +378,10 @@ func broadcastGameStart(room *Room) {
 	defer room.Mutex.Unlock()
 
 	for _, c := range room.Clients {
-		isTurn := (c.PlayerIndex == room.Turn)
 
 		startData := GameStartPayload{
 			PlayerIndex: c.PlayerIndex,
-			Turn:        isTurn,
+			Turn:        room.Turn,
 		}
 		fmt.Printf("%v : %v ", startData.PlayerIndex, startData.Turn)
 		jsonBytes, _ := json.Marshal(startData)
