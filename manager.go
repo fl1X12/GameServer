@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"network/constants"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -18,14 +17,14 @@ type Client struct {
 
 type Room struct {
 	Id      string
-	Clients map[string]*Client
+	Clients map[string]*Client // Changed from map[*websocket.Conn]*Client to map[string]*Client
 	Turn    int
 	Board   [9]int
 	Mutex   sync.Mutex
 }
 
 type RoomManager struct {
-	matchmakingQueue []string
+	matchmakingQueue []string // Changed from []*websocket.Conn to []string (clientIDs)
 	queueLock        sync.Mutex
 
 	rooms     map[string]*Room
@@ -107,7 +106,7 @@ func (rm *RoomManager) HandleMove(conn *websocket.Conn, msg Message) {
 		PlayerIndex: client.PlayerIndex,
 	}
 	moveJson, _ := json.Marshal(broadcastMove)
-	moveMsg := Message{Type: constants.MessageTypeOppMove, Payload: string(moveJson)}
+	moveMsg := Message{Type: "OPP_MOVE", Payload: string(moveJson)}
 
 	// Broadcast to all clients except the current one
 	for _, c := range room.Clients {
@@ -125,7 +124,7 @@ func (rm *RoomManager) HandleMove(conn *websocket.Conn, msg Message) {
 		}
 
 		jsonBytes, _ := json.Marshal(overPayload)
-		finalMsg := Message{Type: constants.MessageTypeGameOver, Payload: string(jsonBytes)}
+		finalMsg := Message{Type: "GAME_OVER", Payload: string(jsonBytes)}
 
 		for _, c := range room.Clients {
 			c.Conn.WriteJSON(finalMsg)
@@ -139,16 +138,17 @@ func (rm *RoomManager) HandleMove(conn *websocket.Conn, msg Message) {
 
 func (rm *RoomManager) HandleFindMatch(conn *websocket.Conn, clientID string) {
 	rm.queueLock.Lock()
-	defer rm.queueLock.Unlock()
 
 	if len(rm.matchmakingQueue) == 0 {
 		rm.matchmakingQueue = append(rm.matchmakingQueue, clientID)
+		rm.queueLock.Unlock()
 		fmt.Println("Player added to queue, waiting for match...")
 		return
 	}
 
 	oppClientID := rm.matchmakingQueue[0]
 	rm.matchmakingQueue = rm.matchmakingQueue[1:]
+	rm.queueLock.Unlock()
 
 	// Get opponent's client info
 	rm.ClientMapLock.RLock()
@@ -157,12 +157,16 @@ func (rm *RoomManager) HandleFindMatch(conn *websocket.Conn, clientID string) {
 
 	if !oppExists {
 		// Opponent no longer exists, try to match current player again
+		rm.queueLock.Lock()
 		rm.matchmakingQueue = append(rm.matchmakingQueue, clientID)
+		rm.queueLock.Unlock()
 		fmt.Println("Opponent disconnected, re-queuing player...")
 		return
 	}
 
-	roomId := fmt.Sprintf("%s", generateClientID())
+	rm.roomsLock.Lock()
+	rm.totalMatches++
+	roomId := fmt.Sprintf("room_%d", rm.totalMatches)
 
 	newRoom := &Room{
 		Id:      roomId,
