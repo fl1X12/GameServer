@@ -6,11 +6,16 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+func generateClientID() string {
+	return uuid.New().String()
 }
 
 func main() {
@@ -35,15 +40,20 @@ func main() {
 			return
 		}
 
+		// Generate unique client ID
+		clientID := generateClientID()
+
+		// Register the client with the manager
+		manager.RegisterClient(conn, clientID)
+
 		defer func() {
 			manager.HandleDisconnect(conn)
 			conn.Close()
 		}()
 
-		fmt.Println("Client Connected:", conn.RemoteAddr())
+		fmt.Printf("Client Connected: %s (ID: %s)\n", conn.RemoteAddr(), clientID)
 
 		for {
-
 			_, msgBytes, err := conn.ReadMessage()
 			if err != nil {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
@@ -61,8 +71,8 @@ func main() {
 
 			switch msg.Type {
 			case "find_match":
-				fmt.Println("Running find match for", conn.RemoteAddr())
-				manager.HandleFindMatch(conn)
+				fmt.Printf("Running find match for %s (ID: %s)\n", conn.RemoteAddr(), clientID)
+				manager.HandleFindMatch(conn, clientID)
 
 			case "make_move":
 				manager.HandleMove(conn, msg)

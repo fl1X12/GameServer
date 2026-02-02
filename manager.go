@@ -3,12 +3,14 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"network/constants"
 	"sync"
 
 	"github.com/gorilla/websocket"
 )
 
 type Client struct {
+	ID          string
 	Conn        *websocket.Conn
 	PlayerIndex int
 	RoomId      string
@@ -16,14 +18,14 @@ type Client struct {
 
 type Room struct {
 	Id      string
-	Clients map[*websocket.Conn]*Client
+	Clients map[string]*Client
 	Turn    int
 	Board   [9]int
 	Mutex   sync.Mutex
 }
 
 type RoomManager struct {
-	matchmakingQueue []*websocket.Conn
+	matchmakingQueue []string
 	queueLock        sync.Mutex
 
 	rooms     map[string]*Room
@@ -31,22 +33,36 @@ type RoomManager struct {
 
 	totalMatches int
 
-	ClientMap     map[*websocket.Conn]*Client
+	ClientMap     map[string]*Client // Changed from map[*websocket.Conn]*Client to map[string]*Client
 	ClientMapLock sync.RWMutex
+
+	// New: mapping from connection to clientID for quick lookups
+	ConnToClientID     map[*websocket.Conn]string
+	ConnToClientIDLock sync.RWMutex
 }
 
 func NewRoomManager() *RoomManager {
 	return &RoomManager{
-		matchmakingQueue: make([]*websocket.Conn, 0),
+		matchmakingQueue: make([]string, 0),
 		rooms:            make(map[string]*Room),
 		totalMatches:     0,
-		ClientMap:        make(map[*websocket.Conn]*Client),
+		ClientMap:        make(map[string]*Client),
+		ConnToClientID:   make(map[*websocket.Conn]string),
 	}
 }
 
 func (rm *RoomManager) HandleMove(conn *websocket.Conn, msg Message) {
+	// Get clientID from connection
+	rm.ConnToClientIDLock.RLock()
+	clientID, ok := rm.ConnToClientID[conn]
+	rm.ConnToClientIDLock.RUnlock()
+	if !ok {
+		fmt.Println("Connection not found, ignoring move")
+		return
+	}
+
 	rm.ClientMapLock.RLock()
-	client, ok := rm.ClientMap[conn]
+	client, ok := rm.ClientMap[clientID]
 	rm.ClientMapLock.RUnlock()
 	if !ok {
 		fmt.Println("Invalid player ignoring move")
@@ -91,10 +107,11 @@ func (rm *RoomManager) HandleMove(conn *websocket.Conn, msg Message) {
 		PlayerIndex: client.PlayerIndex,
 	}
 	moveJson, _ := json.Marshal(broadcastMove)
-	moveMsg := Message{Type: "OPP_MOVE", Payload: string(moveJson)}
+	moveMsg := Message{Type: constants.MessageTypeOppMove, Payload: string(moveJson)}
 
+	// Broadcast to all clients except the current one
 	for _, c := range room.Clients {
-		if c.Conn != conn {
+		if c.ID != clientID {
 			c.Conn.WriteJSON(moveMsg)
 		}
 	}
@@ -108,7 +125,7 @@ func (rm *RoomManager) HandleMove(conn *websocket.Conn, msg Message) {
 		}
 
 		jsonBytes, _ := json.Marshal(overPayload)
-		finalMsg := Message{Type: "GAME_OVER", Payload: string(jsonBytes)}
+		finalMsg := Message{Type: constants.MessageTypeGameOver, Payload: string(jsonBytes)}
 
 		for _, c := range room.Clients {
 			c.Conn.WriteJSON(finalMsg)
@@ -120,41 +137,51 @@ func (rm *RoomManager) HandleMove(conn *websocket.Conn, msg Message) {
 	room.Turn = 1 - room.Turn
 }
 
-func (rm *RoomManager) HandleFindMatch(conn *websocket.Conn) {
+func (rm *RoomManager) HandleFindMatch(conn *websocket.Conn, clientID string) {
 	rm.queueLock.Lock()
 	defer rm.queueLock.Unlock()
 
 	if len(rm.matchmakingQueue) == 0 {
-		rm.matchmakingQueue = append(rm.matchmakingQueue, conn)
+		rm.matchmakingQueue = append(rm.matchmakingQueue, clientID)
 		fmt.Println("Player added to queue, waiting for match...")
 		return
 	}
 
-	oppConn := rm.matchmakingQueue[0]
+	oppClientID := rm.matchmakingQueue[0]
 	rm.matchmakingQueue = rm.matchmakingQueue[1:]
 
-	rm.roomsLock.Lock()
-	rm.totalMatches++
-	roomId := fmt.Sprintf("room_%d", rm.totalMatches)
+	// Get opponent's client info
+	rm.ClientMapLock.RLock()
+	oppClient, oppExists := rm.ClientMap[oppClientID]
+	rm.ClientMapLock.RUnlock()
+
+	if !oppExists {
+		// Opponent no longer exists, try to match current player again
+		rm.matchmakingQueue = append(rm.matchmakingQueue, clientID)
+		fmt.Println("Opponent disconnected, re-queuing player...")
+		return
+	}
+
+	roomId := fmt.Sprintf("%s", generateClientID())
 
 	newRoom := &Room{
 		Id:      roomId,
-		Clients: make(map[*websocket.Conn]*Client),
+		Clients: make(map[string]*Client),
 		Turn:    0,
 		Board:   [9]int{-1, -1, -1, -1, -1, -1, -1, -1, -1},
 	}
 	rm.rooms[roomId] = newRoom
 	rm.roomsLock.Unlock()
 
-	ClientO := &Client{Conn: conn, PlayerIndex: 0, RoomId: roomId}
-	ClientX := &Client{Conn: oppConn, PlayerIndex: 1, RoomId: roomId}
+	ClientO := &Client{ID: clientID, Conn: conn, PlayerIndex: 0, RoomId: roomId}
+	ClientX := &Client{ID: oppClientID, Conn: oppClient.Conn, PlayerIndex: 1, RoomId: roomId}
 
-	newRoom.Clients[conn] = ClientO
-	newRoom.Clients[oppConn] = ClientX
+	newRoom.Clients[clientID] = ClientO
+	newRoom.Clients[oppClientID] = ClientX
 
 	rm.ClientMapLock.Lock()
-	rm.ClientMap[conn] = ClientO
-	rm.ClientMap[oppConn] = ClientX
+	rm.ClientMap[clientID] = ClientO
+	rm.ClientMap[oppClientID] = ClientX
 	rm.ClientMapLock.Unlock()
 
 	fmt.Printf("Match Started! Room: %s\n", roomId)
@@ -163,18 +190,32 @@ func (rm *RoomManager) HandleFindMatch(conn *websocket.Conn) {
 }
 
 func (rm *RoomManager) HandleDisconnect(conn *websocket.Conn) {
-	rm.RemoveFromQueue(conn)
-
-	rm.ClientMapLock.RLock()
-	client, exists := rm.ClientMap[conn]
-	rm.ClientMapLock.RUnlock()
+	// Get clientID from connection
+	rm.ConnToClientIDLock.RLock()
+	clientID, exists := rm.ConnToClientID[conn]
+	rm.ConnToClientIDLock.RUnlock()
 
 	if !exists {
-		fmt.Println("Client disconnected (not in game)")
+		fmt.Println("Connection not found in ConnToClientID map")
 		return
 	}
 
-	fmt.Printf("Player %d disconnected from room %s\n", client.PlayerIndex, client.RoomId)
+	rm.RemoveFromQueue(clientID)
+
+	rm.ClientMapLock.RLock()
+	client, clientExists := rm.ClientMap[clientID]
+	rm.ClientMapLock.RUnlock()
+
+	if !clientExists {
+		fmt.Println("Client disconnected (not in game)")
+		// Clean up connection mapping
+		rm.ConnToClientIDLock.Lock()
+		delete(rm.ConnToClientID, conn)
+		rm.ConnToClientIDLock.Unlock()
+		return
+	}
+
+	fmt.Printf("Player %d (ID: %s) disconnected from room %s\n", client.PlayerIndex, clientID, client.RoomId)
 
 	rm.roomsLock.RLock()
 	room, roomExists := rm.rooms[client.RoomId]
@@ -183,7 +224,7 @@ func (rm *RoomManager) HandleDisconnect(conn *websocket.Conn) {
 	if roomExists {
 		room.Mutex.Lock()
 		for _, c := range room.Clients {
-			if c.Conn != conn {
+			if c.ID != clientID {
 				overPayload := GameOverPayload{Winner: c.PlayerIndex}
 				jsonBytes, _ := json.Marshal(overPayload)
 				dcMsg := Message{
@@ -198,14 +239,30 @@ func (rm *RoomManager) HandleDisconnect(conn *websocket.Conn) {
 		go rm.DeleteRoom(client.RoomId)
 	}
 
+	// Clean up client mapping
 	rm.ClientMapLock.Lock()
-	delete(rm.ClientMap, conn)
+	delete(rm.ClientMap, clientID)
 	rm.ClientMapLock.Unlock()
+
+	// Clean up connection to clientID mapping
+	rm.ConnToClientIDLock.Lock()
+	delete(rm.ConnToClientID, conn)
+	rm.ConnToClientIDLock.Unlock()
 }
 
 func (rm *RoomManager) HandleForfeit(conn *websocket.Conn) {
+	// Get clientID from connection
+	rm.ConnToClientIDLock.RLock()
+	clientID, ok := rm.ConnToClientID[conn]
+	rm.ConnToClientIDLock.RUnlock()
+
+	if !ok {
+		fmt.Println("Connection not found for forfeit")
+		return
+	}
+
 	rm.ClientMapLock.RLock()
-	client, ok := rm.ClientMap[conn]
+	client, ok := rm.ClientMap[clientID]
 	rm.ClientMapLock.RUnlock()
 
 	if !ok {
@@ -220,7 +277,7 @@ func (rm *RoomManager) HandleForfeit(conn *websocket.Conn) {
 	if exists {
 		room.Mutex.Lock()
 		for _, c := range room.Clients {
-			if c.Conn != conn {
+			if c.ID != clientID {
 				overPayload = GameOverPayload{Winner: c.PlayerIndex}
 				break
 			}
@@ -238,7 +295,6 @@ func (rm *RoomManager) HandleForfeit(conn *websocket.Conn) {
 		room.Mutex.Unlock()
 		go rm.DeleteRoom(client.RoomId)
 	}
-
 }
 
 func checkWin(board [9]int) int {
@@ -264,12 +320,12 @@ func checkWin(board [9]int) int {
 	return 2
 }
 
-func (rm *RoomManager) RemoveFromQueue(conn *websocket.Conn) {
+func (rm *RoomManager) RemoveFromQueue(clientID string) {
 	rm.queueLock.Lock()
 	defer rm.queueLock.Unlock()
 
-	for i, c := range rm.matchmakingQueue {
-		if c == conn {
+	for i, id := range rm.matchmakingQueue {
+		if id == clientID {
 			rm.matchmakingQueue = append(rm.matchmakingQueue[:i], rm.matchmakingQueue[i+1:]...)
 			fmt.Println("Removed disconnected player from matchmaking")
 			break
@@ -287,19 +343,19 @@ func (rm *RoomManager) DeleteRoom(roomId string) {
 	delete(rm.rooms, roomId)
 	rm.roomsLock.Unlock()
 
-	// Get all connections
+	// Get all client IDs
 	room.Mutex.Lock()
-	connections := make([]*websocket.Conn, 0, len(room.Clients))
-	for conn := range room.Clients {
-		connections = append(connections, conn)
+	clientIDs := make([]string, 0, len(room.Clients))
+	for clientID := range room.Clients {
+		clientIDs = append(clientIDs, clientID)
 	}
 	room.Mutex.Unlock()
 
-	//Only removing from ClientMap
-	//Players stay connected and can immediately find another match
+	// Only removing from ClientMap
+	// Players stay connected and can immediately find another match
 	rm.ClientMapLock.Lock()
-	for _, conn := range connections {
-		delete(rm.ClientMap, conn)
+	for _, clientID := range clientIDs {
+		delete(rm.ClientMap, clientID)
 	}
 	rm.ClientMapLock.Unlock()
 
@@ -333,8 +389,34 @@ func (rm *RoomManager) Server_state_logger() {
 		rm.ClientMapLock.Unlock()
 	}()
 
-	for key, _ := range rm.rooms {
+	for key := range rm.rooms {
 		fmt.Printf("%s \n", key)
 	}
+}
 
+// RegisterClient registers a new client connection with a unique ID
+func (rm *RoomManager) RegisterClient(conn *websocket.Conn, clientID string) {
+	rm.ConnToClientIDLock.Lock()
+	rm.ConnToClientIDLock.Unlock()
+
+	rm.ConnToClientIDLock.Lock()
+	rm.ConnToClientID[conn] = clientID
+	rm.ConnToClientIDLock.Unlock()
+
+	rm.ClientMapLock.Lock()
+	rm.ClientMap[clientID] = &Client{
+		ID:   clientID,
+		Conn: conn,
+	}
+	rm.ClientMapLock.Unlock()
+
+	fmt.Printf("Client registered with ID: %s\n", clientID)
+}
+
+// GetClientID retrieves the clientID for a given connection
+func (rm *RoomManager) GetClientID(conn *websocket.Conn) (string, bool) {
+	rm.ConnToClientIDLock.RLock()
+	defer rm.ConnToClientIDLock.RUnlock()
+	clientID, ok := rm.ConnToClientID[conn]
+	return clientID, ok
 }
